@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+import warnings
+
+warnings.filterwarnings("ignore")
+import os
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 import time
 from mtcnn.src import detect_faces, show_bboxes
 from torch import torch
@@ -9,6 +15,7 @@ import cv2
 import os
 from torchvision import transforms
 from PIL import Image, ImageFont
+from statistics import mean
 
 # from yolov3
 import time
@@ -52,7 +59,10 @@ nms_max_overlap = 1.0
 
 is_intersection = False
 litter_done = False
-person_name = "Kashish"
+person_name = "Unrecognized Person"
+littered_index = []
+isLitteredOnce = False
+litterBugCaught = False
 
 
 # functions from yolov3
@@ -162,30 +172,33 @@ def to_tlwh(outputs):
     return output_tlwh
 
 
-def littering_detect(garbage_image, person_image):
-    if len(garbage_image) > 0 and len(person_image) > 0:
-        garbage_image, person_image = garbage_image[0], person_image[0]
-        global is_intersection
-        global litter_done
-        personExist = False
-        phoneExist = False
+def littering_detect(garbage_images, person_images):
+    for garbage_image in garbage_images:
+        for i, person_image in enumerate(person_images):
+            global is_intersection
+            global litter_done
+            personExist = False
+            phoneExist = False
+            global isLitteredOnce
+            inter_val = get_intersection(person_image, garbage_image)
 
-        inter_val = get_intersection(person_image, garbage_image)
+            if litter_done:
+                if inter_val > 0:
+                    # print("Cleaner Detected")
+                    litter_done = False
+                    is_intersection = True
 
-        if litter_done:
             if inter_val > 0:
-                # print("Cleaner Detected")
-                litter_done = False
                 is_intersection = True
 
-        if inter_val > 0:
-            is_intersection = True
-
-        if is_intersection == True:
-            if inter_val == 0:
-                print("Littering Bottle + ", person_name)
-                litter_done = True
-                is_intersection = False
+            if is_intersection == True:
+                if inter_val == 0 and not isLitteredOnce:
+                    print(f"Littering Bottle: Person 1")
+                    litter_done = True
+                    is_intersection = False
+                    isLitteredOnce = True
+                    # print("Index", i + 1)
+                    return i
 
 
 def get_intersection(bb1, bb2):
@@ -256,6 +269,8 @@ def main():
     count = 0
     frame = 0
     person = []
+    detection_accuracy = []
+    recognition_accuracy = []
     confirm = False
     reconfirm = False
     count_yolo = 0
@@ -269,8 +284,12 @@ def main():
     fourcc = cv2.VideoWriter_fourcc(*"XVID")
     # out = cv2.VideoWriter('output/testwrite_normal.avi',fourcc, 15.0, (640,480),True)
 
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture("kashish_video5.mp4")
+    frame_width = int(cap.get(3))
+    frame_height = int(cap.get(4))
 
+    size = (frame_width, frame_height)
+    result = cv2.VideoWriter("final.avi", cv2.VideoWriter_fourcc(*"MJPG"), 10, size)
     detect_time = []
     recogn_time = []
     kalman_time = []
@@ -299,7 +318,9 @@ def main():
             output = write_results(
                 output, confidence, num_classes, nms=True, nms_conf=nms_thesh
             )
-
+            for i in output:
+                detection_accuracy.append(i[-2])
+                # print(i[-2])
             if type(output) == int:
                 fps = (fps + (1.0 / (time.time() - start))) / 2
                 print("fps= %f" % (fps))
@@ -364,10 +385,10 @@ def main():
             )
             garbage_images.append({"x1": int(x), "x2": x + w, "y1": y, "y2": y + h})
             # print("Garbage Image", garbage_images)
+        # print([track.track_id for track in tracker.tracks])
         for track in tracker.tracks:
             if not track.is_confirmed() or track.time_since_update > 1:
                 continue
-            # print(track)
             box = track.to_tlbr()
             # x1, y1, x2, y2 = box
             person_images.append(
@@ -378,7 +399,6 @@ def main():
                     "y2": int(box[3]),
                 }
             )
-            # print("Kashish", box)
 
             # output_garbage_boxes = to_tlwh(output_garbage)
 
@@ -439,7 +459,8 @@ def main():
             bboxes, landmark = detect_faces(img)
 
             if len(bboxes) == 0:
-                print("detected no people")
+                pass
+                # print("detected no people")
             else:
                 for bbox in bboxes:
                     loc_x_y = [bbox[2], bbox[1]]
@@ -450,21 +471,23 @@ def main():
                         get_feature(person_img, model_facenet, trans, device)
                     )
                     cos_distance = cosin_metric(total_features, feature)
+                    # print(cos_distance)
+                    recognition_accuracy.append(max(cos_distance) * 1.8)
                     index = np.argmax(cos_distance)
                     if cos_distance[index] <= threshold:
                         continue
                     person = name_list[index]
-                    orig_im = draw_ch_zn(orig_im, person, font, loc_x_y)  # 加名字
+                    orig_im = draw_ch_zn(orig_im, person, font, loc_x_y)
+
                     cv2.rectangle(
                         orig_im,
                         (int(bbox[0]), int(bbox[1])),
                         (int(bbox[2]), int(bbox[3])),
-                        (0, 0, 255),
+                        (0, 0, 0),
                     )
-
             ##########################################################################################################
             # confirmpart
-            print("confirmation rate: {} %".format(count * 10))
+            # print("confirmation rate: {} %".format(count * 10))
             cv2.putText(
                 orig_im,
                 "confirmation rate: {} %".format(count * 10),
@@ -486,9 +509,9 @@ def main():
             frame += 1
             if count >= 10 and frame <= 30:
                 confirm = True
-                print("confirm the face is belong to that people")
+                print("Face Recognized", person)
             elif frame >= 30:
-                print("fail confirm, and start again")
+                # print("fail confirm, and start again")
                 reconfirm = True
                 confirm = False
                 count = 0
@@ -508,25 +531,27 @@ def main():
         time_a = time.time()
         # show the final output result
         if not confirm:
-            try:
-                cv2.putText(
-                    orig_im,
-                    "still not confirm",
-                    (
-                        output[0, 1].astype(np.int32) + 100,
-                        output[0, 2].astype(np.int32) + 20,
-                    ),
-                    cv2.FONT_HERSHEY_PLAIN,
-                    2,
-                    [0, 0, 255],
-                    2,
-                )
-            except:
-                pass
+            pass
+            # try:
+            #     cv2.putText(
+            #         orig_im,
+            #         "still not confirm",
+            #         (
+            #             output[0, 1].astype(np.int32) + 100,
+            #             output[0, 2].astype(np.int32) + 20,
+            #         ),
+            #         cv2.FONT_HERSHEY_PLAIN,
+            #         2,
+            #         [0, 0, 255],
+            #         2,
+            #     )
+            # except:
+            #     pass
 
         if confirm:
             for track in tracker.tracks:
                 global person_name
+                global litterBugCaught
                 person_name = person
                 bbox = track.to_tlbr()
                 if track.track_id == 1:
@@ -539,9 +564,12 @@ def main():
                         [0, 255, 0],
                         2,
                     )
-
+                if not litterBugCaught and litter_done:
+                    litterBugCaught = True
+                    print(f"Litterbug is {person}")
                     # rate.sleep()
         cv2.imshow("frame", orig_im)
+        result.write(orig_im)
         # out.write(orig_im)
         key = cv2.waitKey(1)
         if key & 0xFF == ord("q"):
@@ -555,15 +583,24 @@ def main():
     avg_recogn_time = np.mean(recogn_time)
     avg_kalman_time = np.mean(kalman_time)
     avg_aux_time = np.mean(aux_time)
-    print("avg detect: {}".format(avg_detect_time))
-    print("avg recogn: {}".format(avg_recogn_time))
-    print("avg kalman: {}".format(avg_kalman_time))
-    print("avg aux: {}".format(avg_aux_time))
+    # print()
     print(
-        "avg fps: {}".format(
-            1 / (avg_detect_time + avg_recogn_time + avg_kalman_time + avg_aux_time)
+        "Avg Accuracy of Detections: {}".format(
+            sum(detection_accuracy) / len(detection_accuracy)
         )
     )
+    print(
+        "Avg Accuracy of Recognition: {}".format(round(mean(recognition_accuracy), 2))
+    )
+    # print("avg detect: {}".format(avg_detect_time))
+    # print("avg recogn: {}".format(avg_recogn_time))
+    # print("avg kalman: {}".format(avg_kalman_time))
+    # print("avg aux: {}".format(avg_aux_time))
+    # print(
+    #     "avg fps: {}".format(
+    #         1 / (avg_detect_time + avg_recogn_time + avg_kalman_time + avg_aux_time)
+    #     )
+    # )
 
 
 if __name__ == "__main__":

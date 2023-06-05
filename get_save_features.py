@@ -71,7 +71,7 @@ def save_person_information(name):
     #     if key & 0xFF == ord("q"):
     #         break
     #     ret, frame = cap.read()
-    frame = cv2.imread("jashid.jpeg")  # 480 640 3
+    frame = cv2.imread("manthan_photo.jpg")  # 480 640 3
     # frame = cv2.resize(frame, 480, 640, 3)
     frame = frame[:, :, ::-1]
     img = Image.fromarray(frame)
